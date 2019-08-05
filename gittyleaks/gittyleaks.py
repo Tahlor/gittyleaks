@@ -1,5 +1,8 @@
 # change into git python
 
+## Problems: in original, too many ()
+## Why can't this find everything that "git grep <regexp> $(git rev-list --all)" can?
+
 import re
 from sh import git
 from sh import rm
@@ -7,15 +10,16 @@ import sh
 import os
 import argparse
 
-
 class GittyLeak():
 
     def __init__(self, kwargs=None):
         self.keywords = ['api', 'key', 'username', 'user', 'uname', 'pw', 'password',
                          'pass', 'email', 'mail', 'credentials', 'credential', 'login',
                          'token', 'secret']
-
+        #self.keywords = ['password']
         self.revision_file_regex = '([a-z0-9]{40}):([^:]+):'
+        self.ignore_assignment = False
+        self.include_binary = False
 
         assignment = "(\\b|[ ._-])({})[ '\"]*(=|:)[ '\"]*([^'\" ]+)"
         self.assignment_pattern = assignment.format('|'.join(self.keywords))
@@ -44,10 +48,16 @@ class GittyLeak():
 
         if kwargs is not None:
             self.apply_init_args(kwargs)
+        
+        if not self.keywords:
+            raise Exception("Must have at least 1 keyword")
+        print("Searching for {}".format(self.keywords))
 
     def apply_init_args(self, kwargs):
         for k, v in kwargs.items():
-            setattr(self, k, v)
+            if not v is None:
+                setattr(self, k, v)
+                print(k,v)
 
         if self.find_anything:
             self.excluded_value_chars = []
@@ -82,12 +92,18 @@ class GittyLeak():
 
     def get_git_matches(self, revision):
         try:
-            return str(git('grep', '-i', '-e', '"({})"'.format(r'\|'.join(self.keywords)),
-                           revision, _tty_out=False))
+            args = ['grep', '-i', '-e', '{}'.format(r'\|'.join(self.keywords)), revision]
+            if not self.include_binary:
+                args.insert(1,"-I")
+            results = str(git(*args, _tty_out=False))
+            return results
         # return subprocess.check_output('git grep -i -e
         # "(api\\|key\\|username\\|user\\|pw\\|password\\|pass\\|email\\|mail)" --
         # `git ls-files | grep -v .html` | cat', shell=True).decode('utf8')
         except sh.ErrorReturnCode_1:
+            # import traceback
+            # traceback.print_exc()
+            # # print("ERR")
             return ''
         except:
             print('encoding error at revision: ', revision)
@@ -99,6 +115,7 @@ class GittyLeak():
         for revision in self.revision_list:
             for m in self.get_git_matches(revision).split('\n'):
                 word_matches.add(m)
+                #print(m, word_matches)
         return word_matches
 
     def validated_value(self, v):
@@ -133,6 +150,17 @@ class GittyLeak():
                     matches[identifier].append((appearance, rev))
 
         return matches
+
+    def get_matches_dict_simple(self):
+        matches = {}
+        for match in self.get_word_matches():
+            rev, fname = (re.search(self.revision_file_regex, match).groups())
+            key, _, value = "", match, ""
+            appearance = ':'.join(match.split(':')[2:]).strip()
+            identifier = (fname, key, value)
+            if identifier not in matches:
+                matches[identifier] = []
+            matches[identifier].append((appearance, rev))
 
     def printer(self):
         if not self.no_banner:
@@ -181,7 +209,11 @@ class GittyLeak():
 
         self.get_revision_list()
 
-        self.matched_items = self.get_matches_dict()
+        if self.ignore_assignment:
+            self.matched_items = self.get_matches_dict_simple()
+            print(self.matched_items)
+        else:
+            self.matched_items = self.get_matches_dict()
 
         if self.delete and (self.user and self.repo) or self.link:
             rm('-rf', '../' + self.repo)
@@ -218,6 +250,13 @@ def get_args_parser():
                    help='Omit the banner at the start of a print statement')
     p.add_argument('--no-fancy-color', '-f', action='store_true',
                    help='Do not colorize output')
+    p.add_argument('--keywords', '-k', nargs='+',
+                   help='Override default keywords')
+    p.add_argument('--ignore_assigment', '-i', action='store_true',
+                   help='Just look for keywords, don\'t require =: etc.')
+    p.add_argument('--include_binary', action='store_true',
+                   help='Look in binary flags')
+
     return p
 
 
